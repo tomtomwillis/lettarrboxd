@@ -11,6 +11,7 @@ const envSchema = z.object({
   RADARR_ROOT_FOLDER_ID: z.string().regex(/^\d+$/, 'Must be the numeric root folder ID from Radarr, not a path (see README)').optional(),
   RADARR_TAGS: z.string().optional(),
   RADARR_ADD_UNMONITORED: z.string().default('false').transform(val => val.toLowerCase() === 'true'),
+  RADARR_REMOVE_MISSING: z.enum(['off', 'unmonitor', 'delete']).default('off'),
   CHECK_INTERVAL_MINUTES: z.string().default('10').transform(Number).pipe(z.number().min(10)),
   LETTERBOXD_TAKE_AMOUNT: z.string().optional().transform(val => val ? Number(val) : undefined).pipe(z.number().positive().optional()),
   LETTERBOXD_TAKE_STRATEGY: z.enum(['oldest', 'newest']).optional(),
@@ -34,6 +35,13 @@ const envSchema = z.object({
 }, {
   message: "When using movie limiting, both LETTERBOXD_TAKE_AMOUNT and LETTERBOXD_TAKE_STRATEGY must be specified",
   path: ["LETTERBOXD_TAKE_AMOUNT", "LETTERBOXD_TAKE_STRATEGY"]
+}).refine(data => {
+  // With a take limit, films fall out of the synced window without leaving the
+  // list, so they would be wrongly removed.
+  return data.RADARR_REMOVE_MISSING === 'off' || data.LETTERBOXD_TAKE_AMOUNT === undefined;
+}, {
+  message: "RADARR_REMOVE_MISSING cannot be used together with LETTERBOXD_TAKE_AMOUNT/LETTERBOXD_TAKE_STRATEGY",
+  path: ["RADARR_REMOVE_MISSING"]
 });
 
 export type Env = z.infer<typeof envSchema>;

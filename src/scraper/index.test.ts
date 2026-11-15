@@ -1,4 +1,5 @@
-import { detectListType, fetchMoviesFromUrl, ListType } from './index';
+import { detectListType, fetchMoviesFromUrl, scrapeUrl, ListType } from './index';
+import env from '../util/env';
 import { ListScraper } from './list';
 import { CollectionsScraper } from './collections';
 import { PopularScraper } from './popular';
@@ -327,5 +328,54 @@ describe('scraper index', () => {
       );
     });
 
+  });
+
+  describe('scrapeUrl', () => {
+    const movies = [
+      { id: 1, name: 'Movie 1', slug: '/film/movie1/', tmdbId: '123', imdbId: null, publishedYear: null },
+    ];
+
+    afterEach(() => {
+      (env as any).LETTERBOXD_TAKE_AMOUNT = undefined;
+      (env as any).LETTERBOXD_TAKE_STRATEGY = undefined;
+    });
+
+    function mockListScraper(failedLinks: string[]) {
+      (ListScraper as jest.Mock).mockImplementation(() => ({
+        getMoviesWithStatus: jest.fn().mockResolvedValue({ movies, linkCount: movies.length + failedLinks.length, failedLinks }),
+      }));
+    }
+
+    it('marks a fully scraped watchlist as complete', async () => {
+      mockListScraper([]);
+      const result = await scrapeUrl('https://letterboxd.com/user/watchlist');
+      expect(result).toEqual({ movies, listType: ListType.WATCHLIST, complete: true });
+    });
+
+    it('marks a list with failed films as incomplete', async () => {
+      mockListScraper(['/film/broken/']);
+      const result = await scrapeUrl('https://letterboxd.com/user/list/my-list');
+      expect(result.complete).toBe(false);
+      expect(result.movies).toEqual(movies);
+    });
+
+    it('marks a take-limited list as incomplete', async () => {
+      (env as any).LETTERBOXD_TAKE_AMOUNT = 5;
+      (env as any).LETTERBOXD_TAKE_STRATEGY = 'newest';
+      mockListScraper([]);
+      const result = await scrapeUrl('https://letterboxd.com/user/watchlist');
+      expect(result.complete).toBe(false);
+      expect(ListScraper).toHaveBeenCalledWith('https://letterboxd.com/user/watchlist', 5, 'newest');
+    });
+
+    it('marks unsupported list types as incomplete', async () => {
+      (ListScraper as jest.Mock).mockImplementation(() => ({ getMovies: jest.fn().mockResolvedValue(movies) }));
+      const result = await scrapeUrl('https://letterboxd.com/director/someone');
+      expect(result).toEqual({ movies, listType: ListType.DIRECTOR_FILMOGRAPHY, complete: false });
+    });
+
+    it('rejects unsupported URLs', async () => {
+      await expect(scrapeUrl('https://example.com/x')).rejects.toThrow('Unsupported URL format');
+    });
   });
 });

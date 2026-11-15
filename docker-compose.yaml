@@ -16,6 +16,9 @@ services:
       - CHECK_INTERVAL_MINUTES=60
       - RADARR_MINIMUM_AVAILABILITY=released
 
+      # Optional: unmonitor or delete movies once they leave the list (e.g. watched in cinemas)
+      # - RADARR_REMOVE_MISSING=delete
+
       # Optional root folder ID (if not specified, uses first available)
       # - RADARR_ROOT_FOLDER_ID=1
 

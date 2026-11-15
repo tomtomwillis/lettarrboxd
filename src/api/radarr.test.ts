@@ -2,6 +2,8 @@
 const mockAxiosInstance = {
   get: jest.fn(),
   post: jest.fn(),
+  put: jest.fn(),
+  delete: jest.fn(),
   getUri: jest.fn((config: any) => `http://localhost:7878${config.url}`),
 };
 
@@ -47,7 +49,9 @@ import {
   addMovie,
   upsertMovies,
   describeError,
+  removeMissingMovies,
 } from './radarr';
+import env from '../util/env';
 
 function makeAxiosError(status: number, data: unknown) {
   return Object.assign(new Error(`Request failed with status code ${status}`), {
@@ -442,6 +446,112 @@ describe('radarr API', () => {
         });
 
       await expect(upsertMovies(mockMovies)).rejects.toThrow('Could not get root folder');
+    });
+  });
+
+  describe('removeMissingMovies', () => {
+    // Tag ids: letterboxd=1, tag1=2, tag2=3, unrelated=9
+    const tags = [
+      { id: 1, label: 'letterboxd' },
+      { id: 2, label: 'tag1' },
+      { id: 3, label: 'tag2' },
+      { id: 9, label: 'other' },
+    ];
+    const ourTags = [1, 2, 3];
+
+    const listMovies = [
+      { id: 1, name: 'Still Wanted', slug: '/film/a/', tmdbId: '100', imdbId: null, publishedYear: null },
+      { id: 2, name: 'TV Show', slug: '/film/tv/', tmdbId: null, imdbId: null, publishedYear: null },
+    ];
+
+    const library = [
+      { id: 10, title: 'Still Wanted', tmdbId: 100, monitored: true, hasFile: false, tags: ourTags },
+      { id: 11, title: 'Watched In Cinema', tmdbId: 200, monitored: true, hasFile: false, tags: ourTags },
+      { id: 12, title: 'Watched But Downloaded', tmdbId: 300, monitored: true, hasFile: true, tags: ourTags },
+      { id: 13, title: 'Added By Hand', tmdbId: 400, monitored: true, hasFile: false, tags: [] },
+      { id: 14, title: 'Other Instance', tmdbId: 500, monitored: true, hasFile: false, tags: [1, 9] },
+      { id: 15, title: 'Already Unmonitored', tmdbId: 600, monitored: false, hasFile: false, tags: ourTags },
+    ];
+
+    function mockRadarr(movies = library, tagList = tags) {
+      mockAxiosInstance.get.mockImplementation(async (url: string) => {
+        if (url === '/api/v3/tag') return { data: tagList };
+        if (url === '/api/v3/movie') return { data: movies };
+        throw new Error(`unexpected GET ${url}`);
+      });
+    }
+
+    afterEach(() => {
+      mockAxiosInstance.get.mockReset();
+      (env as any).DRY_RUN = false;
+    });
+
+    it('deletes only our un-downloaded movies that left the list, keeping files', async () => {
+      mockRadarr();
+      mockAxiosInstance.delete.mockResolvedValue({});
+
+      await removeMissingMovies(listMovies, 'delete');
+
+      const deletedUrls = mockAxiosInstance.delete.mock.calls.map(call => call[0]);
+      expect(deletedUrls.sort()).toEqual(['/api/v3/movie/11', '/api/v3/movie/15']);
+      expect(mockAxiosInstance.delete).toHaveBeenCalledWith('/api/v3/movie/11', {
+        params: { deleteFiles: false, addImportExclusion: false },
+      });
+      expect(mockAxiosInstance.put).not.toHaveBeenCalled();
+    });
+
+    it('unmonitors only monitored movies in unmonitor mode', async () => {
+      mockRadarr();
+      mockAxiosInstance.put.mockResolvedValue({});
+
+      await removeMissingMovies(listMovies, 'unmonitor');
+
+      expect(mockAxiosInstance.put).toHaveBeenCalledTimes(1);
+      expect(mockAxiosInstance.put).toHaveBeenCalledWith('/api/v3/movie/editor', { movieIds: [11], monitored: false });
+      expect(mockAxiosInstance.delete).not.toHaveBeenCalled();
+    });
+
+    it('makes no changes in dry run mode', async () => {
+      (env as any).DRY_RUN = true;
+      mockRadarr();
+
+      await removeMissingMovies(listMovies, 'delete');
+
+      expect(mockAxiosInstance.delete).not.toHaveBeenCalled();
+      expect(logger.info).toHaveBeenCalledWith(expect.stringContaining('[DRY RUN] Would delete movie no longer on list: Watched In Cinema'));
+    });
+
+    it('refuses to run when a configured tag cannot be resolved', async () => {
+      mockRadarr(library, tags);
+      mockAxiosInstance.post.mockRejectedValue(new Error('cannot create tag'));
+      mockAxiosInstance.get.mockImplementation(async (url: string) => {
+        if (url === '/api/v3/tag') return { data: [{ id: 1, label: 'letterboxd' }] };
+        return { data: library };
+      });
+
+      await expect(removeMissingMovies(listMovies, 'delete')).rejects.toThrow('Could not resolve all configured tags');
+      expect(mockAxiosInstance.delete).not.toHaveBeenCalled();
+    });
+
+    it('logs and continues when a single removal fails', async () => {
+      mockRadarr();
+      mockAxiosInstance.delete
+        .mockRejectedValueOnce(new Error('nope'))
+        .mockResolvedValueOnce({});
+
+      await removeMissingMovies(listMovies, 'delete');
+
+      expect(mockAxiosInstance.delete).toHaveBeenCalledTimes(2);
+      expect(logger.error).toHaveBeenCalled();
+    });
+
+    it('does nothing when nothing has left the list', async () => {
+      mockRadarr([library[0]]);
+
+      await removeMissingMovies(listMovies, 'delete');
+
+      expect(mockAxiosInstance.delete).not.toHaveBeenCalled();
+      expect(mockAxiosInstance.put).not.toHaveBeenCalled();
     });
   });
 });
