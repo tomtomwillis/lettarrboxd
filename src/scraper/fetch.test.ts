@@ -14,7 +14,7 @@ jest.mock('../util/env', () => ({
   default: mockEnv,
 }));
 
-import { fetchPage } from './fetch';
+import { fetchPage, fetchFinalUrl } from './fetch';
 
 global.fetch = jest.fn();
 
@@ -100,5 +100,40 @@ describe('fetchPage', () => {
     await expect(fetchPage('https://letterboxd.com/film/the-matrix/')).rejects.toThrow(
       'FlareSolverr request failed: 500 Internal Server Error'
     );
+  });
+});
+
+describe('fetchFinalUrl', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockEnv.FLARESOLVERR_URL = undefined;
+  });
+
+  it('returns the redirected URL when fetching directly', async () => {
+    (global.fetch as jest.Mock).mockResolvedValueOnce({ ok: true, url: 'https://letterboxd.com/film/fight-club/' });
+    await expect(fetchFinalUrl('https://letterboxd.com/tmdb/550/')).resolves.toBe('https://letterboxd.com/film/fight-club/');
+  });
+
+  it('returns null when the direct request fails', async () => {
+    (global.fetch as jest.Mock).mockResolvedValueOnce({ ok: false, url: 'https://letterboxd.com/tmdb/1/' });
+    await expect(fetchFinalUrl('https://letterboxd.com/tmdb/1/')).resolves.toBeNull();
+  });
+
+  it('returns the solution URL via FlareSolverr', async () => {
+    mockEnv.FLARESOLVERR_URL = 'http://flaresolverr:8191';
+    (global.fetch as jest.Mock).mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ status: 'ok', message: '', solution: { url: 'https://letterboxd.com/film/fight-club/', status: 200, response: '' } }),
+    });
+    await expect(fetchFinalUrl('https://letterboxd.com/tmdb/550/')).resolves.toBe('https://letterboxd.com/film/fight-club/');
+  });
+
+  it('returns null when FlareSolverr reports a non-2xx upstream status', async () => {
+    mockEnv.FLARESOLVERR_URL = 'http://flaresolverr:8191';
+    (global.fetch as jest.Mock).mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ status: 'ok', message: '', solution: { url: 'https://letterboxd.com/tmdb/1/', status: 404, response: '' } }),
+    });
+    await expect(fetchFinalUrl('https://letterboxd.com/tmdb/1/')).resolves.toBeNull();
   });
 });

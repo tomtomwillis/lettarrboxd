@@ -24,6 +24,25 @@ export async function fetchPage(url: string): Promise<Response> {
 }
 
 async function fetchViaFlareSolverr(flareSolverrUrl: string, url: string): Promise<Response> {
+    const solution = await solveViaFlareSolverr(flareSolverrUrl, url);
+    return new Response(solution.response, { status: solution.status });
+}
+
+/**
+ * Fetch a Letterboxd URL, following redirects, and return the final URL it
+ * landed on, or null if the request did not succeed.
+ */
+export async function fetchFinalUrl(url: string): Promise<string | null> {
+    if (!env.FLARESOLVERR_URL) {
+        const response = await fetch(url);
+        return response.ok ? response.url : null;
+    }
+
+    const solution = await solveViaFlareSolverr(env.FLARESOLVERR_URL, url);
+    return solution.status >= 200 && solution.status < 300 ? solution.url : null;
+}
+
+async function solveViaFlareSolverr(flareSolverrUrl: string, url: string): Promise<NonNullable<FlareSolverrResponse['solution']>> {
     const endpoint = `${flareSolverrUrl.replace(/\/$/, '')}/v1`;
     logger.debug(`Fetching ${url} via FlareSolverr at ${endpoint}`);
 
@@ -46,5 +65,5 @@ async function fetchViaFlareSolverr(flareSolverrUrl: string, url: string): Promi
         throw new Error(`FlareSolverr could not fetch ${url}: ${data.message}`);
     }
 
-    return new Response(data.solution.response, { status: data.solution.status });
+    return data.solution;
 }

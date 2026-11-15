@@ -1,4 +1,5 @@
-import { detectListType, fetchMoviesFromUrl, scrapeUrl, ListType } from './index';
+import { detectListType, fetchMoviesFromUrl, scrapeUrl, isTmdbIdOnList, filmSlugFromPath, ListType } from './index';
+import { fetchFinalUrl } from './fetch';
 import env from '../util/env';
 import { ListScraper } from './list';
 import { CollectionsScraper } from './collections';
@@ -27,6 +28,8 @@ jest.mock('./collections');
 
 // Mock the PopularScraper
 jest.mock('./popular');
+
+jest.mock('./fetch');
 
 describe('scraper index', () => {
   beforeEach(() => {
@@ -340,42 +343,70 @@ describe('scraper index', () => {
       (env as any).LETTERBOXD_TAKE_STRATEGY = undefined;
     });
 
-    function mockListScraper(failedLinks: string[]) {
+    function mockListScraper(allLinks: string[]) {
       (ListScraper as jest.Mock).mockImplementation(() => ({
-        getMoviesWithStatus: jest.fn().mockResolvedValue({ movies, linkCount: movies.length + failedLinks.length, failedLinks }),
+        getMoviesWithStatus: jest.fn().mockResolvedValue({ movies, allLinks, failedLinks: [] }),
       }));
     }
 
-    it('marks a fully scraped watchlist as complete', async () => {
-      mockListScraper([]);
+    it('returns the slugs of every film on a watchlist', async () => {
+      mockListScraper(['/film/movie1/', '/film/Movie2/']);
       const result = await scrapeUrl('https://letterboxd.com/user/watchlist');
-      expect(result).toEqual({ movies, listType: ListType.WATCHLIST, complete: true });
+      expect(result).toEqual({ movies, listType: ListType.WATCHLIST, allFilmSlugs: new Set(['movie1', 'movie2']) });
     });
 
-    it('marks a list with failed films as incomplete', async () => {
-      mockListScraper(['/film/broken/']);
-      const result = await scrapeUrl('https://letterboxd.com/user/list/my-list');
-      expect(result.complete).toBe(false);
-      expect(result.movies).toEqual(movies);
-    });
-
-    it('marks a take-limited list as incomplete', async () => {
-      (env as any).LETTERBOXD_TAKE_AMOUNT = 5;
+    it('passes the take limit through but still returns every slug', async () => {
+      (env as any).LETTERBOXD_TAKE_AMOUNT = 1;
       (env as any).LETTERBOXD_TAKE_STRATEGY = 'newest';
-      mockListScraper([]);
-      const result = await scrapeUrl('https://letterboxd.com/user/watchlist');
-      expect(result.complete).toBe(false);
-      expect(ListScraper).toHaveBeenCalledWith('https://letterboxd.com/user/watchlist', 5, 'newest');
+      mockListScraper(['/film/movie1/', '/film/movie2/', '/film/movie3/']);
+      const result = await scrapeUrl('https://letterboxd.com/user/list/my-list');
+      expect(ListScraper).toHaveBeenCalledWith('https://letterboxd.com/user/list/my-list', 1, 'newest');
+      expect(result.allFilmSlugs).toEqual(new Set(['movie1', 'movie2', 'movie3']));
     });
 
-    it('marks unsupported list types as incomplete', async () => {
+    it('returns no slugs for list types that do not support removal', async () => {
       (ListScraper as jest.Mock).mockImplementation(() => ({ getMovies: jest.fn().mockResolvedValue(movies) }));
       const result = await scrapeUrl('https://letterboxd.com/director/someone');
-      expect(result).toEqual({ movies, listType: ListType.DIRECTOR_FILMOGRAPHY, complete: false });
+      expect(result).toEqual({ movies, listType: ListType.DIRECTOR_FILMOGRAPHY, allFilmSlugs: null });
     });
 
     it('rejects unsupported URLs', async () => {
       await expect(scrapeUrl('https://example.com/x')).rejects.toThrow('Unsupported URL format');
+    });
+  });
+
+  describe('filmSlugFromPath', () => {
+    it('extracts slugs from paths and URLs', () => {
+      expect(filmSlugFromPath('/film/fight-club/')).toBe('fight-club');
+      expect(filmSlugFromPath('https://letterboxd.com/film/Fight-Club/?x=1')).toBe('fight-club');
+      expect(filmSlugFromPath('/tmdb/550/')).toBeNull();
+    });
+  });
+
+  describe('isTmdbIdOnList', () => {
+    const slugs = new Set(['fight-club']);
+
+    it('returns true when the TMDB id resolves to a film on the list', async () => {
+      (fetchFinalUrl as jest.Mock).mockResolvedValueOnce('https://letterboxd.com/film/fight-club/');
+      await expect(isTmdbIdOnList(550, slugs)).resolves.toBe(true);
+      expect(fetchFinalUrl).toHaveBeenCalledWith('https://letterboxd.com/tmdb/550/');
+    });
+
+    it('returns false when the film is not on the list', async () => {
+      (fetchFinalUrl as jest.Mock).mockResolvedValueOnce('https://letterboxd.com/film/the-matrix/');
+      await expect(isTmdbIdOnList(603, slugs)).resolves.toBe(false);
+    });
+
+    it('returns null when the id does not resolve to a film', async () => {
+      (fetchFinalUrl as jest.Mock).mockResolvedValueOnce('https://letterboxd.com/tmdb/999/');
+      await expect(isTmdbIdOnList(999, slugs)).resolves.toBeNull();
+      (fetchFinalUrl as jest.Mock).mockResolvedValueOnce(null);
+      await expect(isTmdbIdOnList(999, slugs)).resolves.toBeNull();
+    });
+
+    it('returns null when the lookup throws', async () => {
+      (fetchFinalUrl as jest.Mock).mockRejectedValueOnce(new Error('blocked'));
+      await expect(isTmdbIdOnList(550, slugs)).resolves.toBeNull();
     });
   });
 });

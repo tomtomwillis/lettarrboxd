@@ -189,16 +189,24 @@ interface RadarrLibraryMovie {
 export type RemoveMode = 'unmonitor' | 'delete';
 
 /**
+ * Answers whether the film with this TMDB id is still on the Letterboxd list:
+ * true, false, or null when it cannot be determined.
+ */
+export type ListMembershipCheck = (tmdbId: number) => Promise<boolean | null>;
+
+const MEMBERSHIP_CHECK_DELAY_MS = 1000;
+
+/**
  * Remove (or unmonitor) Radarr movies that this instance added but that are no
  * longer on the Letterboxd list, e.g. because they were logged as watched.
  *
  * Only movies that carry every one of this instance's tags and have no file on
- * disk are affected. Files are never deleted.
- *
- * `listMovies` must be a complete snapshot of the list; the caller is
- * responsible for checking that.
+ * disk are considered. A movie that is not among `listMovies` (which may be
+ * only part of the list when a take limit is set) is removed only after
+ * `isOnList` confirms it is no longer anywhere on the list. Files are never
+ * deleted.
  */
-export async function removeMissingMovies(listMovies: LetterboxdMovie[], mode: RemoveMode): Promise<void> {
+export async function removeMissingMovies(listMovies: LetterboxdMovie[], mode: RemoveMode, isOnList: ListMembershipCheck): Promise<void> {
     const tagNames = parseConfiguredTags();
     const tagIds = await getAllRequiredTagIds();
     if (tagIds.length !== tagNames.length) {
@@ -206,7 +214,7 @@ export async function removeMissingMovies(listMovies: LetterboxdMovie[], mode: R
         throw new Error('Could not resolve all configured tags; skipping removal.');
     }
 
-    const onList = new Set(
+    const scraped = new Set(
         listMovies
             .map(movie => movie.tmdbId ? parseInt(movie.tmdbId, 10) : NaN)
             .filter(id => !Number.isNaN(id))
@@ -215,25 +223,36 @@ export async function removeMissingMovies(listMovies: LetterboxdMovie[], mode: R
     const response = await axios.get('/api/v3/movie');
     const library: RadarrLibraryMovie[] = response.data;
 
-    const ours = library.filter(movie => tagIds.every(tagId => movie.tags?.includes(tagId)));
-    const gone = ours.filter(movie => !onList.has(movie.tmdbId));
+    const candidates = library.filter(movie =>
+        tagIds.every(tagId => movie.tags?.includes(tagId)) &&
+        !scraped.has(movie.tmdbId) &&
+        !movie.hasFile &&
+        (mode === 'delete' || movie.monitored)
+    );
 
-    const downloaded = gone.filter(movie => movie.hasFile);
-    for (const movie of downloaded) {
-        logger.debug(`${movie.title} is no longer on the list but is already downloaded; keeping it.`);
-    }
-
-    const toRemove = gone.filter(movie => !movie.hasFile && (mode === 'delete' || movie.monitored));
-    if (toRemove.length === 0) {
+    if (candidates.length === 0) {
         logger.debug('No movies to remove from Radarr.');
         return;
     }
 
-    const verb = mode === 'delete' ? 'Removing' : 'Unmonitoring';
-    for (const movie of toRemove) {
+    logger.debug(`Checking ${candidates.length} Radarr movie(s) against the full Letterboxd list.`);
+
+    await Bluebird.each(candidates, async (movie, index) => {
+        if (index > 0) {
+            await Bluebird.delay(MEMBERSHIP_CHECK_DELAY_MS);
+        }
+
+        const onList = await isOnList(movie.tmdbId);
+        if (onList !== false) {
+            if (onList === null) {
+                logger.debug(`Keeping ${movie.title}: could not confirm whether it is still on the list.`);
+            }
+            return;
+        }
+
         if (env.DRY_RUN) {
             logger.info(`[DRY RUN] Would ${mode} movie no longer on list: ${movie.title} (TMDB: ${movie.tmdbId})`);
-            continue;
+            return;
         }
 
         try {
@@ -241,14 +260,15 @@ export async function removeMissingMovies(listMovies: LetterboxdMovie[], mode: R
                 await axios.delete(`/api/v3/movie/${movie.id}`, {
                     params: { deleteFiles: false, addImportExclusion: false }
                 });
+                logger.info(`Removed movie no longer on list: ${movie.title} (TMDB: ${movie.tmdbId})`);
             } else {
                 await axios.put('/api/v3/movie/editor', { movieIds: [movie.id], monitored: false });
+                logger.info(`Unmonitored movie no longer on list: ${movie.title} (TMDB: ${movie.tmdbId})`);
             }
-            logger.info(`${verb} movie no longer on list: ${movie.title} (TMDB: ${movie.tmdbId})`);
         } catch (error) {
             logger.error({ error: describeError(error) }, `Error trying to ${mode} movie ${movie.title} (TMDB: ${movie.tmdbId})`);
         }
-    }
+    });
 }
 
 export async function addMovie(movie: LetterboxdMovie, qualityProfileId: number, rootFolderPath: string, tagIds: number[], minimumAvailability: string): Promise<void> {

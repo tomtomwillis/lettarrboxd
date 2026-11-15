@@ -248,12 +248,15 @@ A movie is only touched when **all** of these hold:
 - It is no longer on the list.
 - It has no file yet. Movies already downloaded are always kept.
 
-Removal is skipped for a run, and logged as a warning, when:
+Removal is skipped for a run, and logged as a warning, when the list came back empty. That usually means Letterboxd or Cloudflare blocked the request.
 
-- any film on the list failed to scrape, or
-- the list came back empty, which usually means Letterboxd or Cloudflare blocked the request.
+It works with `LETTERBOXD_TAKE_AMOUNT`/`LETTERBOXD_TAKE_STRATEGY`. Only the newest (or oldest) films are added, but removals are checked against the **whole** list:
 
-It only works with watchlists and regular lists, and cannot be combined with `LETTERBOXD_TAKE_AMOUNT`/`LETTERBOXD_TAKE_STRATEGY`. Use `DRY_RUN=true` first to see what would be removed.
+1. Each run reads every page of the list to collect all film links.
+2. For each Radarr movie that would be removed, lettarrboxd looks up `letterboxd.com/tmdb/<id>/` to find which Letterboxd film it is.
+3. The movie is removed only if that film is not on the list. If the lookup fails, the movie is kept.
+
+Removal only works for watchlists and regular lists. Use `DRY_RUN=true` first to see what would be removed.
 
 > **Running several instances?** Give each one its own tag in `RADARR_TAGS`. Otherwise one instance will treat another instance's movies as "no longer on the list".
 

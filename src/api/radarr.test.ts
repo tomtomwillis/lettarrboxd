@@ -52,6 +52,7 @@ import {
   removeMissingMovies,
 } from './radarr';
 import env from '../util/env';
+import Bluebird from 'bluebird';
 
 function makeAxiosError(status: number, data: unknown) {
   return Object.assign(new Error(`Request failed with status code ${status}`), {
@@ -459,6 +460,7 @@ describe('radarr API', () => {
     ];
     const ourTags = [1, 2, 3];
 
+    // Only the newest films are scraped in full (take limit); the rest are checked via isOnList.
     const listMovies = [
       { id: 1, name: 'Still Wanted', slug: '/film/a/', tmdbId: '100', imdbId: null, publishedYear: null },
       { id: 2, name: 'TV Show', slug: '/film/tv/', tmdbId: null, imdbId: null, publishedYear: null },
@@ -471,26 +473,44 @@ describe('radarr API', () => {
       { id: 13, title: 'Added By Hand', tmdbId: 400, monitored: true, hasFile: false, tags: [] },
       { id: 14, title: 'Other Instance', tmdbId: 500, monitored: true, hasFile: false, tags: [1, 9] },
       { id: 15, title: 'Already Unmonitored', tmdbId: 600, monitored: false, hasFile: false, tags: ourTags },
+      { id: 16, title: 'Older On Watchlist', tmdbId: 700, monitored: true, hasFile: false, tags: ourTags },
+      { id: 17, title: 'Lookup Failed', tmdbId: 800, monitored: true, hasFile: false, tags: ourTags },
     ];
 
-    function mockRadarr(movies = library, tagList = tags) {
+    // 700 is further down the watchlist; 800 cannot be resolved; everything else is gone.
+    const isOnList = jest.fn(async (tmdbId: number) => {
+      if (tmdbId === 700) return true;
+      if (tmdbId === 800) return null;
+      return false;
+    });
+
+    function mockRadarr(movies = library) {
       mockAxiosInstance.get.mockImplementation(async (url: string) => {
-        if (url === '/api/v3/tag') return { data: tagList };
+        if (url === '/api/v3/tag') return { data: tags };
         if (url === '/api/v3/movie') return { data: movies };
         throw new Error(`unexpected GET ${url}`);
       });
     }
 
+    let delaySpy: jest.SpyInstance;
+    beforeEach(() => {
+      delaySpy = jest.spyOn(Bluebird, 'delay').mockImplementation((() => Bluebird.resolve()) as any);
+    });
+
     afterEach(() => {
       mockAxiosInstance.get.mockReset();
+      mockAxiosInstance.delete.mockReset();
+      mockAxiosInstance.put.mockReset();
+      mockAxiosInstance.post.mockReset();
+      delaySpy.mockRestore();
       (env as any).DRY_RUN = false;
     });
 
-    it('deletes only our un-downloaded movies that left the list, keeping files', async () => {
+    it('deletes only our un-downloaded movies confirmed gone from the list, keeping files', async () => {
       mockRadarr();
       mockAxiosInstance.delete.mockResolvedValue({});
 
-      await removeMissingMovies(listMovies, 'delete');
+      await removeMissingMovies(listMovies, 'delete', isOnList);
 
       const deletedUrls = mockAxiosInstance.delete.mock.calls.map(call => call[0]);
       expect(deletedUrls.sort()).toEqual(['/api/v3/movie/11', '/api/v3/movie/15']);
@@ -500,11 +520,21 @@ describe('radarr API', () => {
       expect(mockAxiosInstance.put).not.toHaveBeenCalled();
     });
 
+    it('never looks up scraped, downloaded, or foreign movies', async () => {
+      mockRadarr();
+      mockAxiosInstance.delete.mockResolvedValue({});
+
+      await removeMissingMovies(listMovies, 'delete', isOnList);
+
+      const checked = isOnList.mock.calls.map(call => call[0]).sort();
+      expect(checked).toEqual([200, 600, 700, 800]);
+    });
+
     it('unmonitors only monitored movies in unmonitor mode', async () => {
       mockRadarr();
       mockAxiosInstance.put.mockResolvedValue({});
 
-      await removeMissingMovies(listMovies, 'unmonitor');
+      await removeMissingMovies(listMovies, 'unmonitor', isOnList);
 
       expect(mockAxiosInstance.put).toHaveBeenCalledTimes(1);
       expect(mockAxiosInstance.put).toHaveBeenCalledWith('/api/v3/movie/editor', { movieIds: [11], monitored: false });
@@ -515,21 +545,20 @@ describe('radarr API', () => {
       (env as any).DRY_RUN = true;
       mockRadarr();
 
-      await removeMissingMovies(listMovies, 'delete');
+      await removeMissingMovies(listMovies, 'delete', isOnList);
 
       expect(mockAxiosInstance.delete).not.toHaveBeenCalled();
       expect(logger.info).toHaveBeenCalledWith(expect.stringContaining('[DRY RUN] Would delete movie no longer on list: Watched In Cinema'));
     });
 
     it('refuses to run when a configured tag cannot be resolved', async () => {
-      mockRadarr(library, tags);
       mockAxiosInstance.post.mockRejectedValue(new Error('cannot create tag'));
       mockAxiosInstance.get.mockImplementation(async (url: string) => {
         if (url === '/api/v3/tag') return { data: [{ id: 1, label: 'letterboxd' }] };
         return { data: library };
       });
 
-      await expect(removeMissingMovies(listMovies, 'delete')).rejects.toThrow('Could not resolve all configured tags');
+      await expect(removeMissingMovies(listMovies, 'delete', isOnList)).rejects.toThrow('Could not resolve all configured tags');
       expect(mockAxiosInstance.delete).not.toHaveBeenCalled();
     });
 
@@ -539,19 +568,19 @@ describe('radarr API', () => {
         .mockRejectedValueOnce(new Error('nope'))
         .mockResolvedValueOnce({});
 
-      await removeMissingMovies(listMovies, 'delete');
+      await removeMissingMovies(listMovies, 'delete', isOnList);
 
       expect(mockAxiosInstance.delete).toHaveBeenCalledTimes(2);
       expect(logger.error).toHaveBeenCalled();
     });
 
-    it('does nothing when nothing has left the list', async () => {
+    it('does nothing when every tagged movie was scraped', async () => {
       mockRadarr([library[0]]);
 
-      await removeMissingMovies(listMovies, 'delete');
+      await removeMissingMovies(listMovies, 'delete', isOnList);
 
+      expect(isOnList).not.toHaveBeenCalled();
       expect(mockAxiosInstance.delete).not.toHaveBeenCalled();
-      expect(mockAxiosInstance.put).not.toHaveBeenCalled();
     });
   });
 });

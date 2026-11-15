@@ -297,14 +297,16 @@ describe('env', () => {
       expectValidationFailure();
     });
 
-    it('rejects being combined with a take limit', () => {
+    it('can be combined with a take limit', () => {
       process.env = {
         ...base,
         RADARR_REMOVE_MISSING: 'delete',
         LETTERBOXD_TAKE_AMOUNT: '10',
         LETTERBOXD_TAKE_STRATEGY: 'newest',
       };
-      expectValidationFailure();
+      const env = require('./env').default;
+      expect(env.RADARR_REMOVE_MISSING).toBe('delete');
+      expect(env.LETTERBOXD_TAKE_AMOUNT).toBe(10);
     });
   });
 });
