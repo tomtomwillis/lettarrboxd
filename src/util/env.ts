@@ -35,13 +35,6 @@ const envSchema = z.object({
 }, {
   message: "When using movie limiting, both LETTERBOXD_TAKE_AMOUNT and LETTERBOXD_TAKE_STRATEGY must be specified",
   path: ["LETTERBOXD_TAKE_AMOUNT", "LETTERBOXD_TAKE_STRATEGY"]
-}).refine(data => {
-  // With a take limit, films fall out of the synced window without leaving the
-  // list, so they would be wrongly removed.
-  return data.RADARR_REMOVE_MISSING === 'off' || data.LETTERBOXD_TAKE_AMOUNT === undefined;
-}, {
-  message: "RADARR_REMOVE_MISSING cannot be used together with LETTERBOXD_TAKE_AMOUNT/LETTERBOXD_TAKE_STRATEGY",
-  path: ["RADARR_REMOVE_MISSING"]
 });
 
 export type Env = z.infer<typeof envSchema>;

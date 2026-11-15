@@ -278,7 +278,7 @@ describe('ListScraper', () => {
       expect(movies).toEqual([mockMovie2]);
     });
 
-    it('should report failed links and link count from getMoviesWithStatus', async () => {
+    it('should report all links and failed links from getMoviesWithStatus', async () => {
       const mockHtml = `
         <div class="react-component" data-target-link="/film/movie1/"></div>
         <div class="react-component" data-target-link="/film/movie2/"></div>
@@ -292,7 +292,7 @@ describe('ListScraper', () => {
 
       const result = await new ListScraper('https://letterboxd.com/user/watchlist/').getMoviesWithStatus();
 
-      expect(result).toEqual({ movies: [mockMovie2], linkCount: 2, failedLinks: ['/film/movie1/'] });
+      expect(result).toEqual({ movies: [mockMovie2], allLinks: ['/film/movie1/', '/film/movie2/'], failedLinks: ['/film/movie1/'] });
     });
   });
 });

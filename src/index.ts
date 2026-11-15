@@ -3,7 +3,7 @@ require('dotenv').config();
 
 import env from './util/env';
 import logger from './util/logger';
-import { scrapeUrl, ScrapeResult } from './scraper';
+import { scrapeUrl, isTmdbIdOnList, ScrapeResult } from './scraper';
 import { upsertMovies, removeMissingMovies } from './api/radarr';
 
 function startScheduledMonitoring(): void {
@@ -37,19 +37,20 @@ async function removeMoviesNoLongerOnList(result: ScrapeResult): Promise<void> {
     return;
   }
 
-  if (!result.complete) {
-    logger.warn(`Skipping removal: the ${result.listType} scrape was incomplete or this list type does not support removal.`);
+  const allFilmSlugs = result.allFilmSlugs;
+  if (!allFilmSlugs) {
+    logger.warn(`Skipping removal: not supported for ${result.listType} URLs (only watchlists and regular lists).`);
     return;
   }
 
-  if (result.movies.length === 0) {
+  if (allFilmSlugs.size === 0) {
     // An empty result is far more likely to be a blocked/changed page than a
     // genuinely empty list; never treat it as "remove everything".
     logger.warn('Skipping removal: the list came back empty.');
     return;
   }
 
-  await removeMissingMovies(result.movies, mode);
+  await removeMissingMovies(result.movies, mode, tmdbId => isTmdbIdOnList(tmdbId, allFilmSlugs));
 }
 
 export async function main() {

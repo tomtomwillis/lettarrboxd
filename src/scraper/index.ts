@@ -3,6 +3,7 @@ import { CollectionsScraper } from './collections';
 import { PopularScraper } from './popular';
 import env from '../util/env';
 import logger from '../util/logger';
+import { fetchFinalUrl } from './fetch';
 
 export interface LetterboxdMovie {
     id: number;
@@ -70,11 +71,11 @@ export interface ScrapeResult {
   movies: LetterboxdMovie[];
   listType: ListType;
   /**
-   * True only when the result is a full, trustworthy snapshot of the list:
-   * a list type that supports removal, no `take` limit, and every film page
-   * scraped successfully. Removal logic must not run when this is false.
+   * Slugs of every film on the list (ignoring any take limit), or null when the
+   * list type does not support removal. Used to confirm a film has really left
+   * the list before it is removed from Radarr.
    */
-  complete: boolean;
+  allFilmSlugs: Set<string> | null;
 }
 
 /** List types whose contents shrink when you watch a film (or remove it by hand). */
@@ -83,9 +84,15 @@ export const REMOVAL_SUPPORTED_LIST_TYPES: ReadonlySet<ListType> = new Set([
   ListType.REGULAR_LIST
 ]);
 
+/** Extract the film slug from a Letterboxd film path or URL, e.g. "/film/fight-club/" -> "fight-club". */
+export const filmSlugFromPath = (pathOrUrl: string): string | null => {
+  const match = pathOrUrl.match(/\/film\/([^\/?#]+)/);
+  return match ? match[1].toLowerCase() : null;
+};
+
 /**
- * Scrape a Letterboxd URL and report whether the result is complete enough to
- * be used for removing films from Radarr.
+ * Scrape a Letterboxd URL. For watchlists and regular lists the result also
+ * includes the slug of every film on the list, so removals can be checked.
  */
 export const scrapeUrl = async (inputUrl: string): Promise<ScrapeResult> => {
   const url = await resolveShortLink(inputUrl);
@@ -97,7 +104,7 @@ export const scrapeUrl = async (inputUrl: string): Promise<ScrapeResult> => {
 
   if (!REMOVAL_SUPPORTED_LIST_TYPES.has(listType)) {
     const movies = await fetchMoviesFromUrl(url);
-    return { movies, listType, complete: false };
+    return { movies, listType, allFilmSlugs: null };
   }
 
   const limited = Boolean(env.LETTERBOXD_TAKE_AMOUNT && env.LETTERBOXD_TAKE_STRATEGY);
@@ -105,17 +112,34 @@ export const scrapeUrl = async (inputUrl: string): Promise<ScrapeResult> => {
     ? new ListScraper(url, env.LETTERBOXD_TAKE_AMOUNT, env.LETTERBOXD_TAKE_STRATEGY)
     : new ListScraper(url, undefined, undefined);
 
-  const { movies, linkCount, failedLinks } = await scraper.getMoviesWithStatus();
+  const { movies, allLinks } = await scraper.getMoviesWithStatus();
 
-  if (failedLinks.length > 0) {
-    logger.warn(`${failedLinks.length} of ${linkCount} films could not be scraped; this snapshot is incomplete.`);
+  const allFilmSlugs = new Set(
+    allLinks
+      .map(filmSlugFromPath)
+      .filter((slug): slug is string => slug !== null)
+  );
+
+  return { movies, listType, allFilmSlugs };
+};
+
+/**
+ * Check whether the film with this TMDB id is on the list, by asking Letterboxd
+ * which film the id belongs to. Returns null when that cannot be determined.
+ */
+export const isTmdbIdOnList = async (tmdbId: number, allFilmSlugs: Set<string>): Promise<boolean | null> => {
+  try {
+    const finalUrl = await fetchFinalUrl(`${LETTERBOXD_BASE_URL}/tmdb/${tmdbId}/`);
+    const slug = finalUrl ? filmSlugFromPath(new URL(finalUrl).pathname) : null;
+    if (!slug) {
+      logger.debug(`Could not find a Letterboxd film for TMDB id ${tmdbId}`);
+      return null;
+    }
+    return allFilmSlugs.has(slug);
+  } catch (error) {
+    logger.warn({ err: error }, `Could not look up TMDB id ${tmdbId} on Letterboxd`);
+    return null;
   }
-
-  return {
-    movies,
-    listType,
-    complete: !limited && failedLinks.length === 0
-  };
 };
 
 export const fetchMoviesFromUrl = async (inputUrl: string): Promise<LetterboxdMovie[]> => {

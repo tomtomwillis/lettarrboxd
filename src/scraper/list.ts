@@ -8,8 +8,8 @@ import Scraper from './scraper.interface';
 
 export interface ListScrapeResult {
     movies: LetterboxdMovie[];
-    /** Number of film links found on the list pages (after `take` is applied). */
-    linkCount: number;
+    /** Every film link on the list, ignoring `take`. */
+    allLinks: string[];
     /** Links whose film page could not be scraped. */
     failedLinks: string[];
 }
@@ -23,9 +23,8 @@ export class ListScraper implements Scraper {
     }
 
     /**
-     * Like getMovies, but also reports how many films were on the list and which
-     * ones failed to scrape, so callers can tell a complete snapshot of the list
-     * from a partial one.
+     * Like getMovies, but also returns every film link on the list (even those
+     * outside `take`) and which film pages failed to scrape.
      */
     async getMoviesWithStatus(): Promise<ListScrapeResult> {
         let processUrl = this.url;
@@ -52,7 +51,7 @@ export class ListScraper implements Scraper {
 
         return {
             movies: results.filter((movie): movie is LetterboxdMovie => movie !== null),
-            linkCount: linksToProcess.length,
+            allLinks: allMovieLinks,
             failedLinks
         };
     }

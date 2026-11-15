@@ -47,7 +47,7 @@ describe('main application', () => {
         },
       ];
 
-      (scraperModule.scrapeUrl as jest.Mock).mockResolvedValue({ movies: mockMovies, listType: "watchlist", complete: true });
+      (scraperModule.scrapeUrl as jest.Mock).mockResolvedValue({ movies: mockMovies, listType: "watchlist", allFilmSlugs: new Set(["a"]) });
       (radarrModule.upsertMovies as jest.Mock).mockResolvedValue(undefined);
 
       startScheduledMonitoring();
@@ -82,7 +82,7 @@ describe('main application', () => {
         },
       ];
 
-      (scraperModule.scrapeUrl as jest.Mock).mockResolvedValue({ movies: mockMovies, listType: "watchlist", complete: true });
+      (scraperModule.scrapeUrl as jest.Mock).mockResolvedValue({ movies: mockMovies, listType: "watchlist", allFilmSlugs: new Set(["a"]) });
       (radarrModule.upsertMovies as jest.Mock).mockResolvedValue(undefined);
 
       startScheduledMonitoring();
@@ -108,7 +108,7 @@ describe('main application', () => {
         },
       ];
 
-      (scraperModule.scrapeUrl as jest.Mock).mockResolvedValue({ movies: mockMovies, listType: "watchlist", complete: true });
+      (scraperModule.scrapeUrl as jest.Mock).mockResolvedValue({ movies: mockMovies, listType: "watchlist", allFilmSlugs: new Set(["a"]) });
       (radarrModule.upsertMovies as jest.Mock).mockResolvedValue(undefined);
 
       startScheduledMonitoring();
@@ -118,7 +118,7 @@ describe('main application', () => {
 
       // Clear mocks to test interval callback
       jest.clearAllMocks();
-      (scraperModule.scrapeUrl as jest.Mock).mockResolvedValue({ movies: mockMovies, listType: "watchlist", complete: true });
+      (scraperModule.scrapeUrl as jest.Mock).mockResolvedValue({ movies: mockMovies, listType: "watchlist", allFilmSlugs: new Set(["a"]) });
       (radarrModule.upsertMovies as jest.Mock).mockResolvedValue(undefined);
 
       // Fast-forward time by 10 minutes and run the interval callback
@@ -131,7 +131,7 @@ describe('main application', () => {
     });
     it('should log and keep scheduling when a run fails', async () => {
       const error = new Error('Could not get quality profile ID.');
-      (scraperModule.scrapeUrl as jest.Mock).mockResolvedValue({ movies: [], listType: "watchlist", complete: true });
+      (scraperModule.scrapeUrl as jest.Mock).mockResolvedValue({ movies: [], listType: "watchlist", allFilmSlugs: new Set(["a"]) });
       (radarrModule.upsertMovies as jest.Mock).mockRejectedValue(error);
 
       startScheduledMonitoring();
@@ -162,7 +162,7 @@ describe('main application', () => {
         },
       ];
 
-      (scraperModule.scrapeUrl as jest.Mock).mockResolvedValue({ movies: mockMovies, listType: "watchlist", complete: true });
+      (scraperModule.scrapeUrl as jest.Mock).mockResolvedValue({ movies: mockMovies, listType: "watchlist", allFilmSlugs: new Set(["a"]) });
       (radarrModule.upsertMovies as jest.Mock).mockResolvedValue(undefined);
 
       await main();
@@ -192,26 +192,32 @@ describe('main application', () => {
     });
 
     it('does not remove anything when the feature is off', async () => {
-      await runOnce({ movies, listType: 'watchlist', complete: true });
+      await runOnce({ movies, listType: 'watchlist', allFilmSlugs: new Set(['a']) });
       expect(radarrModule.removeMissingMovies).not.toHaveBeenCalled();
     });
 
-    it('removes after upserting when enabled and the scrape is complete', async () => {
+    it('removes after upserting, checking membership against the full list', async () => {
       (env as any).RADARR_REMOVE_MISSING = 'delete';
-      await runOnce({ movies, listType: 'watchlist', complete: true });
-      expect(radarrModule.removeMissingMovies).toHaveBeenCalledWith(movies, 'delete');
+      const slugs = new Set(['a', 'b']);
+      (scraperModule.isTmdbIdOnList as jest.Mock).mockResolvedValue(true);
+      await runOnce({ movies, listType: 'watchlist', allFilmSlugs: slugs });
+
+      expect(radarrModule.removeMissingMovies).toHaveBeenCalledWith(movies, 'delete', expect.any(Function));
+      const check = (radarrModule.removeMissingMovies as jest.Mock).mock.calls[0][2];
+      await expect(check(42)).resolves.toBe(true);
+      expect(scraperModule.isTmdbIdOnList).toHaveBeenCalledWith(42, slugs);
     });
 
-    it('skips removal when the scrape is incomplete', async () => {
+    it('skips removal for list types that do not support it', async () => {
       (env as any).RADARR_REMOVE_MISSING = 'unmonitor';
-      await runOnce({ movies, listType: 'watchlist', complete: false });
+      await runOnce({ movies, listType: 'director_filmography', allFilmSlugs: null });
       expect(radarrModule.removeMissingMovies).not.toHaveBeenCalled();
-      expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('Skipping removal'));
+      expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('Skipping removal: not supported'));
     });
 
     it('skips removal when the list comes back empty', async () => {
       (env as any).RADARR_REMOVE_MISSING = 'delete';
-      await runOnce({ movies: [], listType: 'watchlist', complete: true });
+      await runOnce({ movies: [], listType: 'watchlist', allFilmSlugs: new Set() });
       expect(radarrModule.removeMissingMovies).not.toHaveBeenCalled();
       expect(logger.warn).toHaveBeenCalledWith('Skipping removal: the list came back empty.');
     });
