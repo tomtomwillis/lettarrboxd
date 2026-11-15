@@ -227,12 +227,35 @@ docker run -d \
 | `RADARR_ROOT_FOLDER_ID` | - | Numeric ID of the Radarr root folder to use, e.g. `2` — not the folder path. Find it via `GET /api/v3/rootfolder` or by hovering the folder under Settings → Media Management in Radarr (the number at the end of the link). Uses the first available root folder if not set |
 | `RADARR_ADD_UNMONITORED` | `false` | When `true`, adds movies to Radarr in an unmonitored state |
 | `RADARR_TAGS` | - | Additional tags to apply to movies (comma-separated). Movies are always tagged with `letterboxd` |
+| `RADARR_REMOVE_MISSING` | `off` | What to do with movies that leave the list (e.g. you logged a cinema-only film as watched before it was downloadable): `off`, `unmonitor` or `delete`. See [Removing watched movies](#removing-watched-movies) |
 | `LETTERBOXD_TAKE_AMOUNT` | - | Number of movies to sync (requires `LETTERBOXD_TAKE_STRATEGY`) |
 | `LETTERBOXD_TAKE_STRATEGY` | - | Movie selection strategy: `newest` or `oldest` (requires `LETTERBOXD_TAKE_AMOUNT`) |
 | `DRY_RUN` | `false` | When `true`, logs what would be added to Radarr without making actual API calls |
 | `FLARESOLVERR_URL` | - | Base URL of a [FlareSolverr](https://github.com/FlareSolverr/FlareSolverr) instance, e.g. `http://flaresolverr:8191`. When set, all Letterboxd requests are proxied through it to get past Cloudflare challenges |
 | `FLARESOLVERR_MAX_TIMEOUT` | `60000` | Maximum time in milliseconds FlareSolverr may spend solving a challenge for a single request |
 | `DATA_DIR` | `/data` | Directory for storing application data. You generally do not need to worry about this. |
+
+### Removing watched movies
+
+When you log a film as watched, Letterboxd removes it from your watchlist. If that film was only in cinemas, Radarr is still waiting to download it. Set `RADARR_REMOVE_MISSING` so each sync cleans these up:
+
+- `unmonitor`: Radarr keeps the movie but stops searching for it.
+- `delete`: the movie is removed from Radarr. Files are never deleted and no import exclusion is added, so putting the film back on your watchlist adds it again.
+
+A movie is only touched when **all** of these hold:
+
+- It carries the `letterboxd` tag **and** every tag in `RADARR_TAGS`, so movies you added to Radarr yourself are left alone.
+- It is no longer on the list.
+- It has no file yet. Movies already downloaded are always kept.
+
+Removal is skipped for a run, and logged as a warning, when:
+
+- any film on the list failed to scrape, or
+- the list came back empty, which usually means Letterboxd or Cloudflare blocked the request.
+
+It only works with watchlists and regular lists, and cannot be combined with `LETTERBOXD_TAKE_AMOUNT`/`LETTERBOXD_TAKE_STRATEGY`. Use `DRY_RUN=true` first to see what would be removed.
+
+> **Running several instances?** Give each one its own tag in `RADARR_TAGS`. Otherwise one instance will treat another instance's movies as "no longer on the list".
 
 ## Development
 

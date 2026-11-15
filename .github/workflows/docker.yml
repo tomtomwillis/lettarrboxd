@@ -4,7 +4,7 @@ on:
   workflow_call:
 
 env:
-  IMAGE_NAME: ghcr.io/ryanpag3/lettarrboxd
+  IMAGE_NAME: ghcr.io/${{ github.repository }}
 
 jobs:
   docker:

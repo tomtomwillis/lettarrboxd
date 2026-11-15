@@ -66,6 +66,58 @@ export const resolveShortLink = async (url: string): Promise<string> => {
   return resolved;
 };
 
+export interface ScrapeResult {
+  movies: LetterboxdMovie[];
+  listType: ListType;
+  /**
+   * True only when the result is a full, trustworthy snapshot of the list:
+   * a list type that supports removal, no `take` limit, and every film page
+   * scraped successfully. Removal logic must not run when this is false.
+   */
+  complete: boolean;
+}
+
+/** List types whose contents shrink when you watch a film (or remove it by hand). */
+export const REMOVAL_SUPPORTED_LIST_TYPES: ReadonlySet<ListType> = new Set([
+  ListType.WATCHLIST,
+  ListType.REGULAR_LIST
+]);
+
+/**
+ * Scrape a Letterboxd URL and report whether the result is complete enough to
+ * be used for removing films from Radarr.
+ */
+export const scrapeUrl = async (inputUrl: string): Promise<ScrapeResult> => {
+  const url = await resolveShortLink(inputUrl);
+  const listType = detectListType(url);
+
+  if (!listType) {
+    throw new Error(`Unsupported URL format: ${url}`);
+  }
+
+  if (!REMOVAL_SUPPORTED_LIST_TYPES.has(listType)) {
+    const movies = await fetchMoviesFromUrl(url);
+    return { movies, listType, complete: false };
+  }
+
+  const limited = Boolean(env.LETTERBOXD_TAKE_AMOUNT && env.LETTERBOXD_TAKE_STRATEGY);
+  const scraper = limited
+    ? new ListScraper(url, env.LETTERBOXD_TAKE_AMOUNT, env.LETTERBOXD_TAKE_STRATEGY)
+    : new ListScraper(url, undefined, undefined);
+
+  const { movies, linkCount, failedLinks } = await scraper.getMoviesWithStatus();
+
+  if (failedLinks.length > 0) {
+    logger.warn(`${failedLinks.length} of ${linkCount} films could not be scraped; this snapshot is incomplete.`);
+  }
+
+  return {
+    movies,
+    listType,
+    complete: !limited && failedLinks.length === 0
+  };
+};
+
 export const fetchMoviesFromUrl = async (inputUrl: string): Promise<LetterboxdMovie[]> => {
   const url = await resolveShortLink(inputUrl);
   const listType = detectListType(url);

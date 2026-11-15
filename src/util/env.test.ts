@@ -255,4 +255,56 @@ describe('env', () => {
     expect(env.FLARESOLVERR_URL).toBeUndefined();
     expect(env.FLARESOLVERR_MAX_TIMEOUT).toBe(60000);
   });
+
+  describe('RADARR_REMOVE_MISSING', () => {
+    function expectValidationFailure() {
+      const mockExit = jest.spyOn(process, 'exit').mockImplementation(() => {
+        throw new Error('process.exit called');
+      });
+      const mockConsoleError = jest.spyOn(console, 'error').mockImplementation();
+      try {
+        expect(() => {
+          jest.isolateModules(() => {
+            require('./env');
+          });
+        }).toThrow('process.exit called');
+        expect(mockConsoleError).toHaveBeenCalledWith(expect.stringContaining('RADARR_REMOVE_MISSING'));
+      } finally {
+        mockExit.mockRestore();
+        mockConsoleError.mockRestore();
+      }
+    }
+
+    const base = {
+      LETTERBOXD_URL: 'https://letterboxd.com/user/watchlist',
+      RADARR_API_URL: 'http://localhost:7878',
+      RADARR_API_KEY: 'test-api-key',
+      RADARR_QUALITY_PROFILE: 'HD-1080p',
+    };
+
+    it('defaults to off', () => {
+      process.env = { ...base };
+      expect(require('./env').default.RADARR_REMOVE_MISSING).toBe('off');
+    });
+
+    it.each(['unmonitor', 'delete'])('accepts %s', mode => {
+      process.env = { ...base, RADARR_REMOVE_MISSING: mode };
+      expect(require('./env').default.RADARR_REMOVE_MISSING).toBe(mode);
+    });
+
+    it('rejects unknown values', () => {
+      process.env = { ...base, RADARR_REMOVE_MISSING: 'yes' };
+      expectValidationFailure();
+    });
+
+    it('rejects being combined with a take limit', () => {
+      process.env = {
+        ...base,
+        RADARR_REMOVE_MISSING: 'delete',
+        LETTERBOXD_TAKE_AMOUNT: '10',
+        LETTERBOXD_TAKE_STRATEGY: 'newest',
+      };
+      expectValidationFailure();
+    });
+  });
 });

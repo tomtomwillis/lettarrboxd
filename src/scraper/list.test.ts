@@ -277,5 +277,22 @@ describe('ListScraper', () => {
 
       expect(movies).toEqual([mockMovie2]);
     });
+
+    it('should report failed links and link count from getMoviesWithStatus', async () => {
+      const mockHtml = `
+        <div class="react-component" data-target-link="/film/movie1/"></div>
+        <div class="react-component" data-target-link="/film/movie2/"></div>
+      `;
+      (global.fetch as jest.Mock).mockResolvedValueOnce({ ok: true, text: async () => mockHtml });
+
+      const mockMovie2 = { id: 2, name: 'Movie 2', slug: '/film/movie2/', tmdbId: '456', imdbId: null, publishedYear: null };
+      (movieModule.getMovie as jest.Mock)
+        .mockRejectedValueOnce(new Error('boom'))
+        .mockResolvedValueOnce(mockMovie2);
+
+      const result = await new ListScraper('https://letterboxd.com/user/watchlist/').getMoviesWithStatus();
+
+      expect(result).toEqual({ movies: [mockMovie2], linkCount: 2, failedLinks: ['/film/movie1/'] });
+    });
   });
 });

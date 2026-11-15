@@ -8,7 +8,7 @@ on:
     types: [published]
 
 env:
-  IMAGE_NAME: ghcr.io/ryanpag3/lettarrboxd
+  IMAGE_NAME: ghcr.io/${{ github.repository }}
 
 jobs:
   promote:
@@ -82,6 +82,7 @@ jobs:
       - name: Retag tested image
         run: |
           TAG="${{ github.event.release.tag_name }}"
+          IMAGE_NAME="${IMAGE_NAME,,}"  # registry names must be lowercase
           SRC="${IMAGE_NAME}:main-${GITHUB_SHA::7}"
           TAGS=(-t "${IMAGE_NAME}:${TAG}")
           if [ "${{ github.event.release.prerelease }}" != "true" ]; then
